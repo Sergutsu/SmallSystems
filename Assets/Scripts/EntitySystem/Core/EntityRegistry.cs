@@ -44,6 +44,11 @@ namespace GalacticVentures.EntitySystem.Core
         // Spatial indexing for location-based queries (optional)
         private Dictionary<Vector3Int, HashSet<string>> _spatialIndex = new();
         private const float SPATIAL_GRID_SIZE = 100f;
+        
+        // Query caching for performance optimization
+        private Dictionary<int, EntityQueryResult> _queryCache = new();
+        private const int _maxCacheSize = 100;
+        private readonly TimeSpan _cacheExpirationTime = TimeSpan.FromSeconds(5);
 
         private void Initialize()
         {
@@ -51,6 +56,7 @@ namespace GalacticVentures.EntitySystem.Core
             _factionGroups = new Dictionary<EntityFaction, HashSet<string>>();
             _componentIndex = new Dictionary<Type, HashSet<string>>();
             _spatialIndex = new Dictionary<Vector3Int, HashSet<string>>();
+            _queryCache = new Dictionary<int, EntityQueryResult>();
             
             // Initialize faction groups
             foreach (EntityFaction faction in Enum.GetValues(typeof(EntityFaction)))
@@ -329,6 +335,157 @@ namespace GalacticVentures.EntitySystem.Core
         }
 
         /// <summary>
+        /// Execute an entity query
+        /// </summary>
+        public EntityQueryResult ExecuteQuery(EntityQuery query)
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var result = new EntityQueryResult(query.QueryId);
+
+            // Check cache first if enabled
+            if (query.UseCache && _queryCache.TryGetValue(query.GetHashCode(), out var cachedResult))
+            {
+                if (DateTime.UtcNow - cachedResult.Timestamp < _cacheExpirationTime)
+                {
+                    cachedResult.SetMetrics(stopwatch.ElapsedMilliseconds, 0, true);
+                    return cachedResult;
+                }
+                else
+                {
+                    _queryCache.Remove(query.GetHashCode());
+                }
+            }
+
+            // Start with all entities or use component filtering for optimization
+            IEnumerable<GameEntity> candidates = GetQueryCandidates(query);
+            int totalChecked = 0;
+
+            // Apply all filters
+            var filteredEntities = new List<GameEntity>();
+            foreach (var entity in candidates)
+            {
+                totalChecked++;
+                if (MatchesQuery(entity, query))
+                {
+                    filteredEntities.Add(entity);
+                }
+            }
+
+            result.AddEntities(filteredEntities);
+            stopwatch.Stop();
+            result.SetMetrics(stopwatch.ElapsedMilliseconds, totalChecked);
+
+            // Cache result if enabled
+            if (query.UseCache && _queryCache.Count < _maxCacheSize)
+            {
+                _queryCache[query.GetHashCode()] = result;
+            }
+
+            if (_enableLogging)
+                Debug.Log($"EntityRegistry: Query executed in {stopwatch.ElapsedMilliseconds}ms, found {result.Count} entities");
+
+            return result;
+        }
+
+        /// <summary>
+        /// Create a new entity query
+        /// </summary>
+        public EntityQuery CreateQuery()
+        {
+            return new EntityQuery();
+        }
+
+        /// <summary>
+        /// Get query candidates using the most selective index
+        /// </summary>
+        private IEnumerable<GameEntity> GetQueryCandidates(EntityQuery query)
+        {
+            // If spatial constraint exists, use spatial index first
+            if (query.Radius > 0)
+            {
+                return GetEntitiesInRadius(query.CenterPosition, query.Radius);
+            }
+
+            // If faction constraints exist, use faction index
+            if (query.AllowedFactions.Count > 0)
+            {
+                var factionEntities = new HashSet<GameEntity>();
+                foreach (var faction in query.AllowedFactions)
+                {
+                    foreach (var entity in GetEntitiesByFaction(faction))
+                    {
+                        factionEntities.Add(entity);
+                    }
+                }
+                return factionEntities;
+            }
+
+            // If component constraints exist, use component index
+            if (query.RequiredComponents.Count > 0)
+            {
+                // Start with the most selective component (smallest set)
+                var mostSelectiveComponent = query.RequiredComponents
+                    .OrderBy(type => _componentIndex.ContainsKey(type) ? _componentIndex[type].Count : int.MaxValue)
+                    .First();
+
+                return GetEntitiesWithComponent(mostSelectiveComponent);
+            }
+
+            // Fall back to all entities
+            return _entities.Values;
+        }
+
+        /// <summary>
+        /// Check if an entity matches the query criteria
+        /// </summary>
+        private bool MatchesQuery(GameEntity entity, EntityQuery query)
+        {
+            if (entity == null) return false;
+
+            // Check required components
+            foreach (var componentType in query.RequiredComponents)
+            {
+                if (!entity.HasComponent(componentType))
+                    return false;
+            }
+
+            // Check excluded components
+            foreach (var componentType in query.ExcludedComponents)
+            {
+                if (entity.HasComponent(componentType))
+                    return false;
+            }
+
+            // Check allowed factions
+            if (query.AllowedFactions.Count > 0 && !query.AllowedFactions.Contains(entity.Faction))
+                return false;
+
+            // Check excluded factions
+            if (query.ExcludedFactions.Count > 0 && query.ExcludedFactions.Contains(entity.Faction))
+                return false;
+
+            // Check spatial constraints
+            if (query.Radius > 0)
+            {
+                var distance = Vector3.Distance(entity.transform.position, query.CenterPosition);
+                if (distance > query.Radius)
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Clear query cache
+        /// </summary>
+        public void ClearQueryCache()
+        {
+            _queryCache.Clear();
+            if (_enableLogging)
+                Debug.Log("EntityRegistry: Query cache cleared");
+        }
+
+        /// <summary>
         /// Clear all entities and indices
         /// </summary>
         public void Clear()
@@ -340,6 +497,7 @@ namespace GalacticVentures.EntitySystem.Core
             }
             _componentIndex.Clear();
             _spatialIndex.Clear();
+            _queryCache.Clear();
             
             if (_enableLogging)
                 Debug.Log("EntityRegistry: Cleared all entities and indices");
@@ -350,6 +508,40 @@ namespace GalacticVentures.EntitySystem.Core
             if (_entities == null)
             {
                 Initialize();
+            }
+        }
+        
+        /// <summary>
+        /// Update method to clean expired cache entries
+        /// </summary>
+        private void Update()
+        {
+            // Clean expired cache entries periodically
+            if (Time.frameCount % 300 == 0) // Every 5 seconds at 60 FPS
+            {
+                CleanExpiredCacheEntries();
+            }
+        }
+        
+        /// <summary>
+        /// Remove expired entries from query cache
+        /// </summary>
+        private void CleanExpiredCacheEntries()
+        {
+            var expiredKeys = new List<int>();
+            var now = DateTime.UtcNow;
+            
+            foreach (var kvp in _queryCache)
+            {
+                if (now - kvp.Value.Timestamp > _cacheExpirationTime)
+                {
+                    expiredKeys.Add(kvp.Key);
+                }
+            }
+            
+            foreach (var key in expiredKeys)
+            {
+                _queryCache.Remove(key);
             }
         }
     }
