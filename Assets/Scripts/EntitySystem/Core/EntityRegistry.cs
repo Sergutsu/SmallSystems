@@ -70,17 +70,22 @@ namespace GalacticVentures.EntitySystem.Core
         /// </summary>
         public bool RegisterEntity(GameEntity entity)
         {
-            if (entity == null || string.IsNullOrEmpty(entity.EntityId))
+            if (entity == null)
             {
-                if (_enableLogging)
-                    Debug.LogError("EntityRegistry: Cannot register null entity or entity with empty ID");
+                EntitySystemLogger.LogError("EntityRegistry", "Cannot register null entity");
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(entity.EntityId))
+            {
+                EntitySystemLogger.LogError("EntityRegistry", "Cannot register entity with empty ID", 
+                    new EntityOperationException("Entity ID is null or empty"));
                 return false;
             }
 
             if (_entities.ContainsKey(entity.EntityId))
             {
-                if (_enableLogging)
-                    Debug.LogWarning($"EntityRegistry: Entity {entity.EntityId} already registered");
+                EntitySystemLogger.LogWarning("EntityRegistry", $"Entity {entity.EntityId} already registered");
                 return false;
             }
 
@@ -94,10 +99,16 @@ namespace GalacticVentures.EntitySystem.Core
             UpdateSpatialIndex(entity.EntityId, entity.transform.position);
             
             // Trigger event
-            EventBus.Instance.TriggerEvent(new EntityCreatedEvent(entity, entity.EntityId, entity.Faction));
+            try
+            {
+                EventBus.Instance.TriggerEvent(new EntityCreatedEvent(entity, entity.EntityId, entity.Faction));
+            }
+            catch (Exception ex)
+            {
+                EntitySystemLogger.LogError("EntityRegistry", $"Failed to trigger EntityCreatedEvent for {entity.EntityId}", ex);
+            }
             
-            if (_enableLogging)
-                Debug.Log($"EntityRegistry: Registered entity {entity.EntityId} with faction {entity.Faction}");
+            EntitySystemLogger.LogInfo("EntityRegistry", $"Registered entity {entity.EntityId} with faction {entity.Faction}");
             
             return true;
         }
@@ -131,10 +142,16 @@ namespace GalacticVentures.EntitySystem.Core
             RemoveFromSpatialIndex(entityId);
             
             // Trigger event
-            EventBus.Instance.TriggerEvent(new EntityDestroyedEvent(entity, entityId, faction));
+            try
+            {
+                EventBus.Instance.TriggerEvent(new EntityDestroyedEvent(entity, entityId, faction));
+            }
+            catch (Exception ex)
+            {
+                EntitySystemLogger.LogError("EntityRegistry", $"Failed to trigger EntityDestroyedEvent for {entityId}", ex);
+            }
             
-            if (_enableLogging)
-                Debug.Log($"EntityRegistry: Unregistered entity {entityId}");
+            EntitySystemLogger.LogInfo("EntityRegistry", $"Unregistered entity {entityId}");
             
             return true;
         }
@@ -381,8 +398,7 @@ namespace GalacticVentures.EntitySystem.Core
                 _queryCache[query.GetHashCode()] = result;
             }
 
-            if (_enableLogging)
-                Debug.Log($"EntityRegistry: Query executed in {stopwatch.ElapsedMilliseconds}ms, found {result.Count} entities");
+            EntitySystemLogger.LogDebug("EntityRegistry", $"Query executed in {stopwatch.ElapsedMilliseconds}ms, found {result.Count} entities");
 
             return result;
         }
@@ -481,8 +497,7 @@ namespace GalacticVentures.EntitySystem.Core
         public void ClearQueryCache()
         {
             _queryCache.Clear();
-            if (_enableLogging)
-                Debug.Log("EntityRegistry: Query cache cleared");
+            EntitySystemLogger.LogInfo("EntityRegistry", "Query cache cleared");
         }
 
         /// <summary>
@@ -499,8 +514,7 @@ namespace GalacticVentures.EntitySystem.Core
             _spatialIndex.Clear();
             _queryCache.Clear();
             
-            if (_enableLogging)
-                Debug.Log("EntityRegistry: Cleared all entities and indices");
+            EntitySystemLogger.LogInfo("EntityRegistry", "Cleared all entities and indices");
         }
 
         private void OnEnable()

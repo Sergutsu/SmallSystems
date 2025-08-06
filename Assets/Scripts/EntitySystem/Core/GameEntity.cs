@@ -87,7 +87,8 @@ namespace GalacticVentures.EntitySystem.Core
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogError($"GameEntity: Error initializing component {componentName} on entity {_entityId}: {ex}");
+                    EntitySystemLogger.LogError("GameEntity", $"Error initializing component {componentName} on entity {_entityId}", 
+                        new ComponentException($"Component initialization failed", ex, typeof(T), _entityId));
                 }
             }
 
@@ -97,7 +98,7 @@ namespace GalacticVentures.EntitySystem.Core
             // Trigger event
             EventBus.Instance.TriggerEvent(new ComponentAddedEvent(this, component));
 
-            Debug.Log($"GameEntity: Added component {componentName} to entity {_entityId}");
+            EntitySystemLogger.LogDebug("GameEntity", $"Added component {componentName} to entity {_entityId}");
         }
 
         /// <summary>
@@ -129,7 +130,8 @@ namespace GalacticVentures.EntitySystem.Core
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogError($"GameEntity: Error cleaning up component {componentName} on entity {_entityId}: {ex}");
+                    EntitySystemLogger.LogError("GameEntity", $"Error cleaning up component {componentName} on entity {_entityId}", 
+                        new ComponentException($"Component cleanup failed", ex, componentType, _entityId));
                 }
             }
 
@@ -142,7 +144,7 @@ namespace GalacticVentures.EntitySystem.Core
             // Trigger event
             EventBus.Instance.TriggerEvent(new ComponentRemovedEvent(this, component));
 
-            Debug.Log($"GameEntity: Removed component {componentName} from entity {_entityId}");
+            EntitySystemLogger.LogDebug("GameEntity", $"Removed component {componentName} from entity {_entityId}");
             return true;
         }
 
@@ -181,7 +183,7 @@ namespace GalacticVentures.EntitySystem.Core
             // Trigger event
             EventBus.Instance.TriggerEvent(new FactionChangedEvent(this, _entityId, oldFaction, newFaction));
 
-            Debug.Log($"GameEntity: Changed faction of entity {_entityId} from {oldFaction} to {newFaction}");
+            EntitySystemLogger.LogInfo("GameEntity", $"Changed faction of entity {_entityId} from {oldFaction} to {newFaction}");
         }
 
         /// <summary>
@@ -226,7 +228,8 @@ namespace GalacticVentures.EntitySystem.Core
                     }
                     catch (Exception ex)
                     {
-                        Debug.LogError($"GameEntity: Error cleaning up component on entity {_entityId}: {ex}");
+                        EntitySystemLogger.LogError("GameEntity", $"Error cleaning up component on entity {_entityId}", 
+                            new ComponentException($"Component cleanup failed during entity destruction", ex, component.GetType(), _entityId));
                     }
                 }
             }
